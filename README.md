@@ -5,13 +5,13 @@ Proyecto integrador de Fundamentos de Redes Neuronales. El objetivo es predecir 
 El repositorio tiene tres partes:
 
 1. **Experimentos (evidencias):** el notebook con todas las corridas, comparaciones y el diseño factorial, con sus salidas.
-2. **Pipeline final:** un script reproducible que entrena el modelo seleccionado y guarda sus artefactos.
+2. **Pipeline final:** scripts reproducibles que entrenan y evalúan el modelo seleccionado y guardan sus artefactos.
 3. **Interfaz:** una aplicación pequeña donde se sube una imagen, se muestra la categoría predicha con sus probabilidades y las métricas del modelo.
 
 ## Problema y datos
 
 - **Dataset:** [Fashion Product Images (Small)](https://www.kaggle.com/datasets/paramaggarwal/fashion-product-images-small/data), de Kaggle. Tiene 44.446 filas originales.
-- **Depuración:** se descartan registros sin imagen, copias exactas con etiquetas contradictorias y se deduplican copias exactas. Quedan 39.437 imágenes.
+- **Depuración:** se descartan registros sin imagen, grupos de copias exactas con etiquetas contradictorias y se conserva una imagen por huella MD5. Quedan 39.437 imágenes.
 - **Variable objetivo:** `articleType`, limitada a las 40 clases con al menos 200 imágenes únicas (cubren el 90,3 % del catálogo).
 - **Entrada:** imagen convertida a RGB, redimensionada a 80 x 60 y normalizada a [0, 1].
 - **Partición:** estratificada 70/15/15 con semilla 42 (entrenamiento 27.605, validación 5.916, prueba 5.916).
@@ -26,66 +26,102 @@ La selección se hizo con F1-macro sobre validación, en un protocolo de un camb
 
 ## Resultados
 
-| Métrica | Valor |
-|---|---|
-| F1-macro (validación, 3 semillas) | 0,8168 ± 0,0055 |
-| F1-macro (prueba) | 0,8005 |
-| Accuracy (prueba) | 0,8578 |
-| F1-weighted (prueba) | 0,8528 |
+Se reportan dos conjuntos de cifras. Ambos usan la misma configuración (CNN base con tasa de aprendizaje 1e-4), pero provienen de corridas distintas.
 
-Hallazgos principales:
+### 1. Notebook de experimentos (evidencia de la selección)
+
+Corrida de la configuración base con lr 1e-4 y semilla 42, dentro del diseño factorial de 32 configuraciones. Sirve para justificar la selección del modelo. Con tres semillas, el F1-macro de validación fue 0,8168 ± 0,0055.
+
+| Métrica | Validación | Prueba |
+|---|---|---|
+| F1-macro | 0,8165 | 0,8005 |
+| Accuracy | 0,8648 | 0,8578 |
+| F1-weighted | 0,8607 | 0,8528 |
+
+### 2. Pipeline final (modelo que usa la interfaz)
+
+Entrenado con `python -m src.entrenar` y evaluado con `python -m src.evaluar`, en una GPU Tesla T4 de Google Colab. Estas son las cifras que corresponden a los archivos de `artefactos/`.
+
+| Métrica | Validación | Prueba |
+|---|---|---|
+| F1-macro | 0,8085 | 0,7907 |
+| Accuracy | 0,8638 | 0,8496 |
+| F1-weighted | 0,8579 | 0,8420 |
+
+La diferencia de unos 0,01 en prueba entre ambas tablas se debe a la variabilidad del entrenamiento en GPU, que no es determinista. No corresponde a un cambio de modelo. La evaluación en prueba se ejecutó una sola vez, para no elegir el modelo con base en ese conjunto.
+
+### Hallazgos principales
 
 - La tasa de aprendizaje fue el factor que más mejoró el resultado. Con 1e-3 la validación era inestable; con 1e-4 la oscilación del val loss bajó de 0,897 a 0,053.
 - Ninguna regularización adicional (class weights, augmentation, Dropout 0,6, GAP, bloque extra) superó al modelo base en validación.
 - Las clases más débiles son *Tunics*, *Kurtis*, *Flats*, *Jackets* y *Sweaters*. Se confunden sobre todo con *Kurtas*, *Tshirts*, *Shirts* y *Heels*.
 
-Los detalles completos están en el notebook de experimentos.
-
 ## Estructura del repositorio
 
 ```
+Proyecto_Fundamentos_Redes_Neuronales/
+├── .env.example
+├── .gitignore
 ├── README.md
 ├── requirements.txt
-├── .gitignore
-├── notebooks/
-│ └── experimentos.ipynb # Evidencias: corridas, comparaciones, factorial, matriz de confusión
-├── src/
-│ ├── datos.py # Limpieza, depuración y partición
-│ ├── modelo.py # Arquitectura de la CNN
-│ ├── entrenar.py # Entrenamiento del modelo final
-│ └── evaluar.py # Métricas en prueba y matriz de confusión
 ├── app/
-│ └── app.py # Interfaz: subir imagen, predecir y mostrar métricas
-├── artefactos/ # Modelo entrenado, lista de clases y métricas (JSON)
-└── data/ # Vacío. El dataset se descarga desde Kaggle
+│   └── app.py
+├── artefactos/
+│   ├── clases.json
+│   ├── historial.json
+│   ├── matriz_confusion.csv
+│   ├── metricas.json
+│   ├── metricas_validacion.json
+│   ├── modelo_final.keras
+│   └── reporte_por_clase.csv
+├── data/
+│   └── .gitkeep
+├── notebooks/
+│   └── experimentos.ipynb
+└── src/
+    ├── __init__.py
+    ├── datos.py
+    ├── entrenar.py
+    ├── evaluar.py
+    └── modelo.py
+```
+
+## Configuración de credenciales
+
+El pipeline descarga el dataset desde Kaggle, así que necesita tu usuario y tu API key. Crea un archivo `.env` en la raíz del repositorio (Git lo ignora):
 
 ```
+KAGGLE_USERNAME=tu_usuario
+KAGGLE_KEY=tu_api_key
+```
+
+El archivo `.env.example` muestra qué variables se necesitan, sin valores.
 
 ## Cómo reproducirlo
 
-Requiere Python 3.10 o superior.
+Requiere Python 3.10 o superior. Ejecuta los comandos desde la raíz del repositorio:
 
 ```bash
 pip install -r requirements.txt
 
-# 1. Preparar los datos y entrenar el modelo final
-python src/entrenar.py
+# 1. Entrenar el modelo final (genera artefactos/)
+python -m src.entrenar
 
-# 2. Evaluar en prueba (genera artefactos/metricas.json)
-python src/evaluar.py
+# 2. Evaluar en prueba (una sola vez)
+python -m src.evaluar
 
 # 3. Abrir la interfaz
 python app/app.py
 ```
 
-El dataset se descarga con `kagglehub` la primera vez que se ejecuta el pipeline.
+El dataset se descarga la primera vez que se ejecuta el pipeline. Para entrenar con GPU, el proyecto se puede correr en Google Colab con GPU activada.
 
 ## Interfaz
 
 La aplicación recibe una imagen y muestra:
 
 - La categoría predicha y las 5 categorías más probables con su probabilidad.
-- Las métricas globales del modelo en el conjunto de prueba.
+- Las métricas globales del modelo en el conjunto de prueba, leídas de `artefactos/metricas.json`.
 - Una advertencia: la métrica por imagen no existe, porque el modelo no conoce la categoría real de la imagen subida.
 
 ## Notebook de experimentos
@@ -102,9 +138,9 @@ Se conserva con sus salidas para poder revisar los resultados sin volver a entre
 ## Limitaciones
 
 - Algunas comparaciones usan una sola semilla. Solo el modelo base y las mejores configuraciones se confirmaron con varias.
-- El conjunto de prueba se usó en dos momentos durante la experimentación.
+- El conjunto de prueba se usó en dos momentos durante la experimentación del notebook, y una vez más en el pipeline final.
 - La resolución de 80 x 60 puede limitar las diferencias finas entre clases parecidas.
-- El entrenamiento en GPU no es completamente determinista; las cifras exactas pueden variar ligeramente.
+- El entrenamiento en GPU no es completamente determinista; las cifras exactas pueden variar ligeramente entre corridas.
 - La auditoría detecta copias exactas, pero no imágenes casi idénticas ni errores de etiquetado aislados.
 
 ## Integrantes
