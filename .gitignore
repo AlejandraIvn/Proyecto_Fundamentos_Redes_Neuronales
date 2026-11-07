@@ -1,0 +1,14 @@
+﻿# Datos (se descargan desde Kaggle)
+data/*
+!data/.gitkeep
+
+# Entornos y cachés de Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Sistema
+.DS_Store
+Thumbs.db

@@ -42,6 +42,7 @@ Hallazgos principales:
 Los detalles completos están en el notebook de experimentos.
 
 ## Estructura del repositorio
+
 ```
 ├── README.md
 ├── requirements.txt
@@ -57,7 +58,9 @@ Los detalles completos están en el notebook de experimentos.
 │ └── app.py # Interfaz: subir imagen, predecir y mostrar métricas
 ├── artefactos/ # Modelo entrenado, lista de clases y métricas (JSON)
 └── data/ # Vacío. El dataset se descarga desde Kaggle
+
 ```
+
 ## Cómo reproducirlo
 
 Requiere Python 3.10 o superior.
