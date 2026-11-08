@@ -4,6 +4,14 @@ Decisión tomada con los experimentos de la Unidad 2: el base con lr 1e-4 tiene 
 mayor F1-macro de validación (0,8168 ± 0,0055 con tres semillas) y ninguna
 modificación lo supera.
 
+En la Unidad 3 se evaluaron dos mejoras adicionales definidas al cierre de la Unidad 2:
+- Más épocas y paciencia en EarlyStopping: en esa corrida, más paciencia no mejoró el resultado. El
+  entrenamiento se detuvo en la época 15, así que el máximo de 40 épocas no llegó a usarse.
+- Transfer learning con MobileNetV2: mejor desempeño; queda como arquitectura candidata para una
+  siguiente iteración.
+El modelo aprobado sigue siendo este.
+Detalle en notebooks/experimentos_u3.ipynb y artefactos/unidad3/.
+
 Uso desde la raíz del repositorio:
     python -m src.entrenar
 
