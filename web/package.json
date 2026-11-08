@@ -1,0 +1,17 @@
+{
+  "name": "fashionvision-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Clasificador de productos de moda en el navegador (TensorFlow.js), listo para Vercel.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/convertir_modelo.mjs"
+  },
+  "dependencies": {
+    "fflate": "0.8.3",
+    "h5wasm": "0.10.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "nombre": "Modelo final",
+  "arquitectura": "cnn",
+  "umbral_revision": 0.5,
+  "alto": 80,
+  "ancho": 60,
+  "convertido": "2026-11-08T03:02:52.579Z"
+}

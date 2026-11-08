@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FashionVision · Clasificador de moda con IA</title>
+  <meta name="description" content="Red neuronal convolucional que predice la categoría de un producto de moda a partir de su foto. Clasifica una imagen o un lote de hasta 40 y descarga el CSV.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%236366f1'/%3E%3Cpath d='M9 9l3-2 3 2v6H9z' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="#inicio">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/>
+          <path d="M9 9l3-2 3 2v6H9z"/>
+        </svg>
+      </span>
+      Fashion<span>Vision</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#inicio">Inicio</a>
+      <a href="#modelo">Conoce el modelo</a>
+      <a href="#probar">Probar modelo</a>
+      <a href="#dentro">Dentro del modelo</a>
+      <a href="#metricas">Métricas</a>
+    </nav>
+    <a class="nav-cta" href="#probar">Probar ahora</a>
+  </header>
+
+  <main>
+    <section id="inicio" class="hero">
+      <div class="hero-glow"></div>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <span class="pill"><i></i> Visión artificial para e-commerce de moda</span>
+          <h1>Cataloga tu moda <span class="grad">con solo una foto</span></h1>
+          <p class="lead">Una red neuronal convolucional que mira la imagen de un producto y predice
+          su categoría entre 40 tipos de artículo, para automatizar la catalogación de tu tienda.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#probar">Probar modelo
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+            <a class="btn btn-ghost" href="#modelo">Cómo funciona</a>
+          </div>
+          <div class="hero-stats">
+            <div><b>40</b><span>categorías</span></div>
+            <div><b>39.437</b><span>imágenes depuradas</span></div>
+            <div><b>1 a 40</b><span>fotos por clasificación</span></div>
+          </div>
+        </div>
+        <div class="hero-art">
+          <svg class="hero-svg" viewBox="0 0 440 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+              <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e293b"/><stop offset="1" stop-color="#0f172a"/></linearGradient>
+              <pattern id="grid" width="16" height="16" patternUnits="userSpaceOnUse"><path d="M16 0H0V16" fill="none" stroke="#334155" stroke-width=".6"/></pattern>
+            </defs>
+            <rect x="20" y="20" width="270" height="340" rx="22" fill="url(#g2)" stroke="#334155"/>
+            <rect x="38" y="56" width="234" height="250" rx="14" fill="url(#grid)" opacity=".7"/>
+            <circle cx="58" cy="38" r="4" fill="#f87171"/><circle cx="72" cy="38" r="4" fill="#fbbf24"/><circle cx="86" cy="38" r="4" fill="#34d399"/>
+            <path d="M110 110l35-22h20a20 12 0 0 0 40 0h20l35 22-18 34-20-10v112h-94V134l-20 10z" fill="#e2e8f0" opacity=".92"/>
+            <path d="M165 88a20 12 0 0 0 40 0" fill="none" stroke="#94a3b8" stroke-width="2"/>
+            <g stroke="url(#g1)" stroke-width="3" fill="none" stroke-linecap="round"><path d="M86 92V76h16M268 92V76h-16M86 262v16h16M268 262v16h-16"/></g>
+            <rect class="scanline" x="86" y="80" width="182" height="3" fill="url(#g1)" opacity=".85"/>
+            <rect x="38" y="318" width="120" height="10" rx="5" fill="#334155"/>
+            <rect x="38" y="318" width="84" height="10" rx="5" fill="url(#g1)"/>
+            <g class="float-card">
+              <rect x="232" y="150" width="190" height="148" rx="16" fill="#0b1224" stroke="#3b4a6b"/>
+              <text x="250" y="178" fill="#94a3b8" font-size="11" font-family="Inter, sans-serif" letter-spacing="1">TOP 5 · EJEMPLO</text>
+              <rect x="250" y="192" width="154" height="8" rx="4" fill="#1e293b"/><rect x="250" y="192" width="128" height="8" rx="4" fill="url(#g1)"/>
+              <rect x="250" y="212" width="154" height="8" rx="4" fill="#1e293b"/><rect x="250" y="212" width="52" height="8" rx="4" fill="#6366f1" opacity=".7"/>
+              <rect x="250" y="232" width="154" height="8" rx="4" fill="#1e293b"/><rect x="250" y="232" width="30" height="8" rx="4" fill="#6366f1" opacity=".55"/>
+              <rect x="250" y="252" width="154" height="8" rx="4" fill="#1e293b"/><rect x="250" y="252" width="18" height="8" rx="4" fill="#6366f1" opacity=".45"/>
+              <rect x="250" y="272" width="154" height="8" rx="4" fill="#1e293b"/><rect x="250" y="272" width="10" height="8" rx="4" fill="#6366f1" opacity=".35"/>
+            </g>
+            <g class="float-chip">
+              <rect x="300" y="66" width="122" height="44" rx="22" fill="#0b1224" stroke="#22d3ee" stroke-opacity=".6"/>
+              <circle cx="324" cy="88" r="8" fill="url(#g1)"/>
+              <text x="340" y="93" fill="#e2e8f0" font-size="14" font-weight="600" font-family="Inter, sans-serif">Tshirts</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section id="modelo" class="about">
+      <div class="sec-head">
+        <span class="eyebrow">Conoce el modelo</span>
+        <h2>De la foto a la categoría en cuatro pasos</h2>
+        <p>Las tiendas en línea deben etiquetar miles de productos. Este modelo aprende a reconocer el tipo de
+        artículo (camisetas, relojes, sandalias, bolsos…) a partir de su imagen, para que la catalogación
+        no dependa solo del trabajo manual.</p>
+      </div>
+      <div class="about-cards">
+        <div class="info-card">
+          <h3>¿Qué es?</h3>
+          <p id="que-es">Una red neuronal convolucional entrenada con el dataset público <i>Fashion Product Images (Small)</i>
+          de Kaggle, depurado a 39.437 imágenes sin duplicados. Aquí corre directamente en tu navegador.</p>
+        </div>
+        <div class="info-card">
+          <h3>¿Qué resuelve?</h3>
+          <p>Predice el <code>articleType</code> de un producto entre las 40 clases con al menos 200 imágenes,
+          que cubren el 90,3 % del catálogo original.</p>
+        </div>
+      </div>
+      <ol class="steps" id="pasos"></ol>
+    </section>
+
+    <section id="probar" class="zona">
+      <div class="sec-head sec-head-center">
+        <span class="eyebrow">Probar modelo</span>
+        <h2>Clasifica uno o varios productos</h2>
+        <p>Sube una foto o un lote de hasta 40, como haría un vendedor al publicar. Funciona mejor con fotos de
+        catálogo: un solo producto, centrado y con fondo claro. Las imágenes no salen de tu navegador.</p>
+      </div>
+
+      <div class="tool">
+        <div class="panel panel-carga">
+          <div class="tool-bar"><i></i><i></i><i></i><span>IMÁGENES DE ENTRADA (1 A 40)</span></div>
+          <label class="dropzone" id="dropzone">
+            <input id="entrada" type="file" accept="image/*" multiple hidden>
+            <span class="dz-icon">
+              <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+            </span>
+            <b>Arrastra tus imágenes aquí</b>
+            <span>o haz clic para seleccionarlas · JPG, PNG, WEBP</span>
+          </label>
+          <button type="button" class="btn-ejemplos" id="btn-ejemplos" hidden>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="9" rx="1.5"/><rect x="3" y="15" width="7" height="6" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/></svg>
+            <span>Probar con imágenes de ejemplo</span>
+          </button>
+          <div class="lista-head" id="lista-head" hidden>
+            <span id="contador">0 / 40 imágenes</span>
+            <button type="button" class="link-btn" id="btn-limpiar">Quitar todas</button>
+          </div>
+          <ul class="lista" id="lista"></ul>
+          <p class="aviso" id="aviso" hidden></p>
+          <button type="button" class="btn-clasificar" id="btn-clasificar" disabled>Clasificar</button>
+          <a class="btn-csv" id="btn-csv" hidden download>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
+            <span>Descargar CSV</span>
+          </a>
+          <div class="hint">
+            <span class="estado-modelo" id="estado-modelo"><i></i> Cargando el modelo…</span>
+            <span>Umbral de revisión manual: <b id="umbral">50,0 %</b></span>
+          </div>
+        </div>
+        <div class="panel panel-res">
+          <div class="panel-title">Resultado de la predicción <em>40 categorías</em></div>
+          <div id="resultado"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="dentro" class="dentro">
+      <div class="sec-head">
+        <span class="eyebrow">Dentro del modelo</span>
+        <h2>Así “piensa” el modelo, sin tecnicismos</h2>
+        <p>Una red neuronal no sigue reglas escritas por una persona: aprendió observando miles de fotos con su
+        categoría. Elige una imagen y recorre, paso a paso, lo que ocurre por dentro hasta llegar a una respuesta.</p>
+      </div>
+
+      <div class="dm">
+        <div class="dm-picker">
+          <span class="res-label">Elige una imagen</span>
+          <div class="dm-thumbs" id="dm-thumbs"></div>
+        </div>
+        <div class="dm-tabs" id="dm-tabs" role="tablist" aria-label="Pasos del recorrido"></div>
+        <div class="dm-body">
+          <div class="dm-stage">
+            <div class="dm-visual" id="dm-visual"><div class="dm-cargando"><div class="scanner"><span></span></div>Cargando el modelo…</div></div>
+            <div class="dm-texto" id="dm-texto"></div>
+          </div>
+          <aside class="dm-decision" id="dm-decision" aria-live="polite"></aside>
+        </div>
+      </div>
+
+      <div class="dm-cards">
+        <div class="dm-card"><span class="dm-card-ic">1</span><h4 id="dm-aprendio-t">Aprendió con ejemplos</h4>
+          <p id="dm-aprendio">Vio 27.605 fotos de este catálogo, cada una con su categoría, y fue ajustando sus
+          parámetros para equivocarse cada vez menos.</p></div>
+        <div class="dm-card"><span class="dm-card-ic">2</span><h4>Aprende patrones, no reglas</h4>
+          <p>Nadie le dijo “si tiene tacón, es Heels”. Encontró por sí mismo qué combinaciones de formas y colores
+          separan una categoría de otra.</p></div>
+        <div class="dm-card"><span class="dm-card-ic">3</span><h4>También se equivoca</h4>
+          <p>Confunde sobre todo productos muy parecidos: zapatos casuales y deportivos, Tshirts y Tops, Flats y
+          Heels. Por eso las respuestas con poca confianza se envían a revisión manual. Entre los ejemplos hay uno
+          que falla: búscalo.</p></div>
+      </div>
+      <p class="dm-fuente">Las imágenes de ejemplo son del conjunto de prueba de <i>Fashion Product Images (Small)</i>
+      (Kaggle): el modelo no las vio durante el entrenamiento.</p>
+    </section>
+
+    <section id="metricas" class="zona zona-metricas">
+      <div class="sec-head">
+        <span class="eyebrow">Rendimiento del modelo</span>
+        <h2>Cómo se desempeña en datos que nunca vio</h2>
+        <p>Métricas globales calculadas sobre el conjunto de prueba (15 % de los datos, separado antes del entrenamiento).</p>
+      </div>
+      <div class="m-grid" id="metricas-grid"></div>
+      <div class="note">
+        <div class="note-ic">i</div>
+        <div>
+          <h4>Métricas globales, no por imagen</h4>
+          <p>Estas cifras resumen la evaluación del modelo sobre todo el conjunto de prueba. Para las imágenes que tú
+          cargas no existe una métrica de acierto: el modelo no conoce su categoría real. La probabilidad que ves junto
+          a cada predicción es la salida del modelo, no una medida de que la predicción sea correcta.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div><b>Fashion<span>Vision</span></b> · Proyecto integrador de Fundamentos de Redes Neuronales</div>
+    <div>Julian · Kinan · Ivanna</div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="app.js"></script>
+  <script src="dentro.js"></script>
+</body>
+</html>

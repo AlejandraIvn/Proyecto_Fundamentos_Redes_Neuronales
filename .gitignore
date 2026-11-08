@@ -12,3 +12,14 @@ __pycache__/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Web (Node / Vercel)
+node_modules/
+.vercel
+
+# Credenciales (nunca se suben)
+.env
+kaggle.json
+
+# Descargas de Colab
+resultados_u3.zip

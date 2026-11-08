@@ -1,17 +1,24 @@
-﻿"""Interfaz: subir una imagen, predecir y mostrar métricas.
+"""Interfaz: subir una o varias imágenes (hasta 40) en la misma sección, predecir y mostrar métricas.
 
 Uso desde la raíz del repositorio:
-    python app/app.py
+    python app/app.py            # local
+    python app/app.py --share    # enlace público temporal (útil en Google Colab)
 
-Lee los artefactos generados por el pipeline (src.entrenar y src.evaluar):
+Lee los artefactos generados por el pipeline (src.entrenar y src.evaluar) o por el notebook:
     artefactos/modelo_final.keras   modelo entrenado
     artefactos/clases.json          orden de las 40 clases de salida
     artefactos/metricas.json        métricas globales en el conjunto de prueba
+    artefactos/config_final.json    arquitectura elegida y umbral de revisión manual (opcional)
 """
 
+import base64
+import csv
 import html
+import io
 import json
 import sys
+import tempfile
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -26,6 +33,7 @@ CARPETA_ARTEFACTOS = RAIZ / "artefactos"
 RUTA_MODELO = CARPETA_ARTEFACTOS / "modelo_final.keras"
 RUTA_CLASES = CARPETA_ARTEFACTOS / "clases.json"
 RUTA_METRICAS = CARPETA_ARTEFACTOS / "metricas.json"
+RUTA_CONFIG = CARPETA_ARTEFACTOS / "config_final.json"
 
 try:  # mismo tamaño que el pipeline; valor de respaldo si TensorFlow no carga
     from src.datos import IMG_SIZE
@@ -33,6 +41,22 @@ except Exception:  # noqa: BLE001
     IMG_SIZE = (80, 60)  # (alto, ancho)
 
 TOP_K = 5
+MAX_LOTE = 40              # máximo de imágenes por lote en la clasificación masiva
+UMBRAL_POR_DEFECTO = 0.5   # se usa si config_final.json no define umbral_revision
+
+
+def cargar_config():
+    """Configuración del modelo final (la escribe el notebook); vacía si no existe."""
+    try:
+        with open(RUTA_CONFIG, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+CONFIG = cargar_config()
+UMBRAL_REVISION = float(CONFIG.get("umbral_revision", UMBRAL_POR_DEFECTO))
+ES_TRANSFER = CONFIG.get("arquitectura") == "mobilenetv2"
 
 # Nombres y descripciones legibles para las claves que escribe src/evaluar.py.
 # Las claves desconocidas se muestran igual, con un nombre derivado de la clave.
@@ -68,25 +92,84 @@ def cargar_metricas():
 def preprocesar(ruta):
     """Replica el preprocesamiento de evaluación (generador_evaluacion en src/datos.py):
     RGB, redimensionado a 80 x 60 con interpolación 'nearest' (la de Keras por defecto)
-    y escalado a [0, 1]."""
+    y escalado a [0, 1].
+
+    Para fotos que no vienen del catálogo: las zonas transparentes se ponen en blanco y, si la foto
+    no tiene la proporción 3:4 del dataset (60 x 80), se rellena con blanco en lugar de deformarla.
+    Las imágenes del dataset ya tienen esa proporción, así que para ellas no cambia nada.
+    """
     with Image.open(ruta) as img:
         img.load()
-        img = img.convert("RGB")
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            rgba = img.convert("RGBA")
+            img = Image.new("RGB", rgba.size, "white")
+            img.paste(rgba, mask=rgba.split()[3])
+        else:
+            img = img.convert("RGB")
     alto, ancho = IMG_SIZE
+    w, h = img.size
+    if w * alto != h * ancho:
+        lienzo = (w, round(w * alto / ancho)) if w * alto > h * ancho else (round(h * ancho / alto), h)
+        fondo = Image.new("RGB", lienzo, "white")
+        fondo.paste(img, ((lienzo[0] - w) // 2, (lienzo[1] - h) // 2))
+        img = fondo
     img = img.resize((ancho, alto), Image.NEAREST)
     arreglo = np.asarray(img, dtype=np.float32) / 255.0
     return arreglo[np.newaxis, ...]
 
 
-def predecir_top(ruta):
-    """Devuelve las TOP_K clases más probables como lista de (clase, probabilidad)."""
-    x = preprocesar(ruta)
-    probs = cargar_modelo().predict(x, verbose=0)[0]
-    clases = cargar_clases()
-    if len(probs) != len(clases):
-        raise ValueError("La salida del modelo no coincide con clases.json.")
-    orden = np.argsort(probs)[::-1][:TOP_K]
-    return [(clases[i], float(probs[i])) for i in orden]
+def predecir_lote(rutas):
+    """Clasifica varias imágenes en una sola pasada del modelo.
+
+    Devuelve una fila por imagen, en el orden recibido. Las imágenes que no se pueden leer quedan
+    con estado de error y no detienen el resto del lote.
+    """
+    filas, validas, tensores = [], [], []
+    for ruta in rutas:
+        nombre = Path(ruta).name
+        if Path(ruta).suffix.lower() not in EXTENSIONES:
+            filas.append({"nombre_imagen": nombre, "estado": "formato no admitido"})
+            continue
+        try:
+            tensores.append(preprocesar(ruta))
+            validas.append(len(filas))
+            filas.append({"nombre_imagen": nombre, "ruta": ruta, "estado": "ok"})
+        except (UnidentifiedImageError, OSError):
+            filas.append({"nombre_imagen": nombre, "estado": "imagen no válida"})
+    if tensores:
+        probs = cargar_modelo().predict(np.concatenate(tensores), verbose=0)
+        clases = cargar_clases()
+        if probs.shape[1] != len(clases):
+            raise ValueError("La salida del modelo no coincide con clases.json.")
+        for k, p in zip(validas, probs):
+            orden = np.argsort(p)[::-1]
+            filas[k].update({
+                "categoria_predicha": clases[orden[0]], "probabilidad": float(p[orden[0]]),
+                "segunda_categoria": clases[orden[1]], "probabilidad_segunda": float(p[orden[1]]),
+                "requiere_revision": bool(p[orden[0]] < UMBRAL_REVISION),
+                "top": [(clases[j], float(p[j])) for j in orden[:TOP_K]],
+            })
+    return filas
+
+
+def guardar_csv_lote(filas):
+    """Escribe el CSV del lote en una carpeta temporal y devuelve su ruta."""
+    columnas = ["nombre_imagen", "categoria_predicha", "probabilidad", "segunda_categoria",
+                "probabilidad_segunda", "requiere_revision", "estado"]
+    sello = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ruta = Path(tempfile.mkdtemp(prefix="lote_")) / f"clasificacion_lote_{sello}.csv"
+    with open(ruta, "w", newline="", encoding="utf-8-sig") as f:  # utf-8-sig: Excel respeta las tildes
+        escritor = csv.DictWriter(f, fieldnames=columnas, extrasaction="ignore")
+        escritor.writeheader()
+        for fila in filas:
+            salida = dict(fila)
+            for clave in ("probabilidad", "probabilidad_segunda"):
+                if clave in salida:
+                    salida[clave] = f"{salida[clave]:.4f}"
+            if "requiere_revision" in salida:
+                salida["requiere_revision"] = "si" if salida["requiere_revision"] else "no"
+            escritor.writerow(salida)
+    return str(ruta)
 
 
 # --------------------------------------------------------------------------- #
@@ -107,16 +190,17 @@ def html_estado_vacio():
         </svg>
       </div>
       <h4>Los resultados aparecerán aquí</h4>
-      <p>Carga la foto de un producto y pulsa <b>Clasificar imagen</b>.
-      Verás la categoría predicha y las cinco más probables.</p>
+      <p>Carga una o varias fotos (hasta 40) y pulsa <b>Clasificar</b>. Con una imagen verás las cinco
+      categorías más probables; con varias, una tabla del lote. En ambos casos podrás descargar el CSV.</p>
     </div>"""
 
 
-def html_cargando():
-    return """
+def html_cargando(n=1):
+    titulo = "Analizando la imagen…" if n == 1 else f"Clasificando {n} imágenes…"
+    return f"""
     <div class="res-empty res-loading">
       <div class="scanner"><span></span></div>
-      <h4>Analizando la imagen…</h4>
+      <h4>{titulo}</h4>
       <p>Redimensionando a 80 x 60 píxeles y calculando las probabilidades de las 40 categorías.</p>
     </div>"""
 
@@ -129,8 +213,14 @@ def html_error(titulo, detalle):
     </div>"""
 
 
-def html_resultados(top):
+def html_resultados(fila):
+    """Resultado de una sola imagen: miniatura, categoría predicha y top 5."""
+    top = fila["top"]
     clase, prob = top[0]
+    mini = _miniatura(fila["ruta"], (84, 112))
+    imagen = f'<img src="{mini}" alt="">' if mini else ""
+    estado = ('<span class="tag tag-warn">Revisión manual</span>' if fila["requiere_revision"]
+              else '<span class="tag tag-ok">Automática</span>')
     filas = []
     for i, (c, p) in enumerate(top):
         filas.append(f"""
@@ -145,16 +235,22 @@ def html_resultados(top):
     return f"""
     <div class="res-card">
       <div class="res-main">
-        <span class="res-label">Categoría predicha</span>
-        <div class="res-class">{html.escape(clase)}</div>
-        <div class="res-prob"><span>{_pct(prob)}</span> de probabilidad asignada por el modelo</div>
+        {imagen}
+        <div>
+          <span class="res-label">Categoría predicha</span>
+          <div class="res-class">{html.escape(clase)}</div>
+          <div class="res-prob"><span>{_pct(prob)}</span> de probabilidad asignada por el modelo</div>
+          <span class="res-file">{html.escape(fila["nombre_imagen"])}</span>
+          {estado}
+        </div>
       </div>
       <div class="res-top">
         <span class="res-label">Top 5 categorías más probables</span>
         <ul class="bars">{''.join(filas)}</ul>
       </div>
       <p class="res-foot">Las probabilidades indican cómo reparte el modelo su salida entre las 40 categorías.
-      No son una medida de acierto para esta imagen.</p>
+      No son una medida de acierto para esta imagen. Por debajo de {_pct(UMBRAL_REVISION)} la predicción
+      se marca para revisión manual.</p>
     </div>"""
 
 
@@ -190,6 +286,74 @@ def html_metricas():
     return f'<div class="m-grid">{"".join(tarjetas)}</div>'
 
 
+def _miniatura(ruta, tamano=(72, 96)):
+    """Miniatura en base64 (no depende de que Gradio sirva el archivo); fondo blanco si es PNG transparente."""
+    try:
+        with Image.open(ruta) as img:
+            img = img.convert("RGBA")
+            fondo = Image.new("RGB", img.size, "white")
+            fondo.paste(img, mask=img.split()[3])
+            fondo.thumbnail(tamano)
+            buffer = io.BytesIO()
+            fondo.save(buffer, format="JPEG", quality=85)
+        return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def html_lote(filas):
+    ok = [f for f in filas if f["estado"] == "ok"]
+    revision = [f for f in ok if f["requiere_revision"]]
+    errores = len(filas) - len(ok)
+    conteo = {}
+    for f in ok:
+        conteo[f["categoria_predicha"]] = conteo.get(f["categoria_predicha"], 0) + 1
+    top_cats = sorted(conteo.items(), key=lambda kv: -kv[1])[:6]
+
+    tarjetas = [
+        ("Imágenes procesadas", f"{len(filas)}", ""),
+        ("Clasificadas automáticamente", f"{len(ok) - len(revision)}", "is-ok"),
+        ("Para revisión manual", f"{len(revision)}", "is-warn"),
+        ("Con error de lectura", f"{errores}", "is-err" if errores else ""),
+    ]
+    resumen = "".join(f'<div class="lote-stat {c}"><span>{html.escape(t)}</span><b>{v}</b></div>'
+                      for t, v, c in tarjetas)
+    chips = "".join(f'<span class="chip">{html.escape(c)} <b>{n}</b></span>' for c, n in top_cats)
+
+    filas_html = []
+    for i, f in enumerate(filas, start=1):
+        mini = _miniatura(f["ruta"]) if f["estado"] == "ok" else ""
+        img = f'<img src="{mini}" alt="">' if mini else '<div class="thumb-x">!</div>'
+        nombre = (f'<small class="t-name" title="{html.escape(f["nombre_imagen"])}">'
+                  f'{html.escape(f["nombre_imagen"])}</small>')
+        if f["estado"] != "ok":
+            celdas = f'<td class="t-err"><b>{html.escape(f["estado"].capitalize())}</b>{nombre}</td><td></td><td></td>'
+        else:
+            estado = ('<span class="tag tag-warn">Revisión manual</span>' if f["requiere_revision"]
+                      else '<span class="tag tag-ok">Automática</span>')
+            celdas = (f'<td><b>{html.escape(f["categoria_predicha"])}</b>{nombre}'
+                      f'<small>2.ª opción: {html.escape(f["segunda_categoria"])} · {_pct(f["probabilidad_segunda"])}</small></td>'
+                      f'<td class="t-num">{_pct(f["probabilidad"])}'
+                      f'<div class="bar-track"><div class="bar-fill" style="--w:{max(f["probabilidad"] * 100, 0.6):.1f}%"></div></div></td>'
+                      f'<td>{estado}</td>')
+        filas_html.append(f'<tr><td class="t-idx">{i}</td><td class="t-img">{img}</td>{celdas}</tr>')
+
+    return f"""
+    <div class="res-card lote-card">
+      <div class="lote-stats">{resumen}</div>
+      {f'<div class="chips"><span class="res-label">Categorías más frecuentes en el lote</span>{chips}</div>' if chips else ''}
+      <div class="tabla-wrap">
+        <table class="lote-tabla">
+          <thead><tr><th>#</th><th>Imagen</th><th>Categoría predicha</th><th>Probabilidad</th><th>Estado</th></tr></thead>
+          <tbody>{''.join(filas_html)}</tbody>
+        </table>
+      </div>
+      <p class="res-foot">Se marca para revisión manual toda predicción con probabilidad menor a
+      {_pct(UMBRAL_REVISION)}. El CSV contiene el nombre de cada imagen, la categoría predicha,
+      su probabilidad, la segunda opción y si requiere revisión.</p>
+    </div>"""
+
+
 # --------------------------------------------------------------------------- #
 # Callbacks
 # --------------------------------------------------------------------------- #
@@ -197,35 +361,51 @@ def html_metricas():
 EXTENSIONES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 
-def al_cambiar_imagen(ruta):
-    return html_estado_vacio()
+def _rutas(archivos):
+    """gr.File puede entregar rutas (str) u objetos con .name, según la versión de Gradio."""
+    return [a if isinstance(a, str) else getattr(a, "name", str(a)) for a in (archivos or [])]
 
 
-def mostrar_cargando(ruta):
-    if not ruta:
+def al_cambiar_archivos(archivos):
+    return html_estado_vacio(), None
+
+
+def mostrar_cargando(archivos):
+    n = len(_rutas(archivos))
+    if not n or n > MAX_LOTE:
         return html_estado_vacio()
-    return html_cargando()
+    return html_cargando(n)
 
 
-def clasificar(ruta):
-    if not ruta:
-        return html_error("Falta la imagen", "Selecciona o arrastra una imagen antes de clasificar.")
-    if Path(ruta).suffix.lower() not in EXTENSIONES:
-        return html_error("Formato no admitido", "Usa una imagen JPG, PNG, WEBP, BMP o GIF.")
+def clasificar(archivos):
+    """Clasifica una o varias imágenes (máximo MAX_LOTE) y devuelve el HTML del resultado y el CSV.
+
+    Con una imagen muestra la categoría y el top 5; con varias, el resumen y la tabla del lote.
+    """
+    rutas = _rutas(archivos)
+    if not rutas:
+        return html_error("Faltan las imágenes", "Selecciona o arrastra entre 1 y "
+                          f"{MAX_LOTE} imágenes antes de clasificar."), None
+    if len(rutas) > MAX_LOTE:
+        return html_error("Demasiadas imágenes", f"Seleccionaste {len(rutas)} imágenes; el máximo es "
+                          f"{MAX_LOTE}. Divide la carga en varios lotes."), None
     try:
-        top = predecir_top(ruta)
-    except (UnidentifiedImageError, OSError):
-        return html_error("Imagen no válida",
-                          "No se pudo leer el archivo como imagen. Prueba con otro archivo.")
+        filas = predecir_lote(rutas)
     except ImportError:
         return html_error("TensorFlow no está instalado",
-                          "Instala las dependencias con pip install -r requirements.txt.")
+                          "Instala las dependencias con pip install -r requirements.txt."), None
     except Exception as e:  # noqa: BLE001
         if not RUTA_MODELO.exists():
             return html_error("Modelo no encontrado",
-                              "No existe artefactos/modelo_final.keras. Ejecuta python -m src.entrenar.")
-        return html_error("Error durante la predicción", str(e))
-    return html_resultados(top)
+                              "No existe artefactos/modelo_final.keras. Ejecuta python -m src.entrenar."), None
+        return html_error("Error durante la predicción", str(e)), None
+    if len(filas) == 1:
+        if filas[0]["estado"] != "ok":
+            detalle = ("Usa una imagen JPG, PNG, WEBP, BMP o GIF." if filas[0]["estado"] == "formato no admitido"
+                       else "No se pudo leer el archivo como imagen. Prueba con otro archivo.")
+            return html_error("No se pudo clasificar la imagen", detalle), None
+        return html_resultados(filas[0]), guardar_csv_lote(filas)
+    return html_lote(filas), guardar_csv_lote(filas)
 
 
 # --------------------------------------------------------------------------- #
@@ -336,10 +516,21 @@ def _icono(nombre):
             f'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{ICONO[nombre]}</svg>')
 
 
+if ES_TRANSFER:  # el texto sigue al modelo elegido en config_final.json
+    PASO_PROCESAMIENTO = ("MobileNetV2, preentrenada en ImageNet y ajustada a este catálogo, reescala la imagen y "
+                          "detecta bordes, texturas y formas cada vez más complejas.")
+    PASO_CLASIFICACION = ("Un promedio global resume esas características y la salida softmax asigna una "
+                          "probabilidad a cada una de las 40 categorías.")
+else:
+    PASO_PROCESAMIENTO = ("Tres bloques convolucionales (32, 64 y 128 filtros) detectan bordes, texturas y formas "
+                          "cada vez más complejas.")
+    PASO_CLASIFICACION = ("Una capa densa combina esas características y la salida softmax asigna una "
+                          "probabilidad a cada una de las 40 categorías.")
+
 PASOS = [
     ("upload", "Entrada", "Cargas la foto de un producto. Se convierte a RGB, se reduce a 80 x 60 píxeles y sus valores se normalizan entre 0 y 1."),
-    ("layers", "Procesamiento", "Tres bloques convolucionales (32, 64 y 128 filtros) detectan bordes, texturas y formas cada vez más complejas."),
-    ("chart", "Clasificación", "Una capa densa combina esas características y la salida softmax asigna una probabilidad a cada una de las 40 categorías."),
+    ("layers", "Procesamiento", PASO_PROCESAMIENTO),
+    ("chart", "Clasificación", PASO_CLASIFICACION),
     ("check", "Resultado", "Se muestra la categoría con mayor probabilidad y las cinco alternativas más probables."),
 ]
 
@@ -371,11 +562,12 @@ MODELO = f"""
 </section>
 """
 
-PROBAR_HEAD = """
+PROBAR_HEAD = f"""
 <div id="probar" class="sec-head sec-head-center">
   <span class="eyebrow">Probar modelo</span>
-  <h2>Clasifica un producto ahora</h2>
-  <p>Funciona mejor con fotos de catálogo: un solo producto, centrado y con fondo claro, como las imágenes del dataset.</p>
+  <h2>Clasifica uno o varios productos</h2>
+  <p>Sube una foto o un lote de hasta {MAX_LOTE}, como haría un vendedor al publicar. Funciona mejor con fotos de
+  catálogo: un solo producto, centrado y con fondo claro, como las imágenes del dataset.</p>
 </div>
 """
 
@@ -516,9 +708,9 @@ section, #probar, #metricas { scroll-margin-top: 80px; }
 .tool-bar i:first-child { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
 .tool-bar span { margin-left: 6px; font-weight: 600; letter-spacing: .04em; }
 #panel-carga, #panel-res { background: var(--bg) !important; border: 1px solid var(--line) !important; border-radius: 18px !important; padding: 18px !important; gap: 14px !important; }
-#uploader { border-radius: 14px !important; border: 1.5px dashed #3b4a6b !important; background: rgba(99,102,241,.04) !important; min-height: 320px; transition: border-color .2s, background .2s; }
+#uploader { border-radius: 14px !important; border: 1.5px dashed #3b4a6b !important; background: rgba(99,102,241,.04) !important; min-height: 220px; transition: border-color .2s, background .2s; }
 #uploader:hover { border-color: var(--cyan) !important; background: rgba(34,211,238,.05) !important; }
-#uploader img { object-fit: contain !important; }
+#csv-salida { border-radius: 14px !important; }
 #btn-clasificar { background: var(--grad) !important; color: #fff !important; border: none !important; border-radius: 12px !important;
   font-weight: 600 !important; font-size: 16px !important; padding: 14px !important; box-shadow: 0 12px 28px -12px rgba(99,102,241,.9); transition: .2s !important; }
 #btn-clasificar:hover { transform: translateY(-1px); filter: brightness(1.08); }
@@ -544,9 +736,12 @@ section, #probar, #metricas { scroll-margin-top: 80px; }
 .res-card { animation: fadeUp .45s ease both; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .res-label { display: block; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
-.res-main { padding: 24px; border-radius: 16px; margin-bottom: 22px; position: relative; overflow: hidden;
+.res-main { display: flex; gap: 18px; align-items: center; padding: 20px; border-radius: 16px; margin-bottom: 22px; position: relative; overflow: hidden;
   background: linear-gradient(135deg, rgba(34,211,238,.16), rgba(139,92,246,.2)); border: 1px solid rgba(139,92,246,.45); }
 .res-main::after { content: ""; position: absolute; width: 180px; height: 180px; right: -60px; top: -60px; border-radius: 50%; background: var(--grad); opacity: .25; filter: blur(30px); }
+.res-main img { flex: none; width: 84px; height: 112px; object-fit: contain; border-radius: 12px; background: #fff; position: relative; z-index: 1; }
+.res-main > div { position: relative; z-index: 1; min-width: 0; }
+.res-file { display: block; margin: 6px 0 10px; font-size: 12.5px; color: #94a3b8; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .res-class { font: 700 clamp(30px, 4vw, 40px)/1.1 'Space Grotesk', sans-serif; color: #fff; margin-bottom: 8px; }
 .res-prob { color: #cbd5e1; font-size: 14.5px; }
 .res-prob span { font-weight: 700; color: var(--cyan); font-size: 16px; }
@@ -591,6 +786,39 @@ section, #probar, #metricas { scroll-margin-top: 80px; }
 .foot b { color: var(--text); font-family: 'Space Grotesk', sans-serif; }
 .foot b span { color: var(--cyan); }
 
+/* LOTE (varias imágenes) */
+.lote-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+.lote-stat { padding: 14px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.lote-stat span { font-size: 12px; color: var(--muted); }
+.lote-stat b { font: 700 26px 'Space Grotesk', sans-serif; color: #fff; }
+.lote-stat.is-ok b { color: #34d399; }
+.lote-stat.is-warn b { color: #fbbf24; }
+.lote-stat.is-err b { color: #f87171; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.chips .res-label { width: 100%; margin-bottom: 2px; }
+.chip { font-size: 13px; color: #cbd5e1; padding: 5px 11px; border-radius: 999px; background: rgba(99,102,241,.12); border: 1px solid rgba(99,102,241,.35); }
+.chip b { color: var(--cyan); margin-left: 4px; }
+.tabla-wrap { max-height: 560px; overflow: auto; border: 1px solid var(--line); border-radius: 14px; scrollbar-color: #334155 transparent; scrollbar-width: thin; }
+.lote-tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
+.lote-tabla thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--muted); font-size: 12px;
+  font-weight: 600; letter-spacing: .06em; text-transform: uppercase; text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.lote-tabla td { padding: 10px 12px; border-bottom: 1px solid rgba(148,163,184,.08); color: #cbd5e1; vertical-align: middle; }
+.lote-tabla tr:hover td { background: rgba(99,102,241,.06); }
+.lote-tabla td b { color: #fff; font-weight: 600; }
+.lote-tabla small { display: block; color: #64748b; font-size: 12px; margin-top: 3px; }
+.t-idx { color: #64748b !important; width: 28px; }
+.t-img { width: 64px; min-width: 64px; }
+.t-img img, .thumb-x { display: grid; place-items: center; width: 44px !important; max-width: none !important; height: 58px !important; object-fit: contain; border-radius: 8px; background: #fff; }
+.thumb-x { background: rgba(248,113,113,.15); color: #f87171; font-weight: 700; }
+.lote-tabla small.t-name { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; color: #94a3b8; }
+.t-num { min-width: 96px; font-variant-numeric: tabular-nums; }
+.t-num .bar-track { height: 6px; margin-top: 6px; }
+.t-num .bar-fill { background: var(--grad); animation: none; }
+.t-err { color: #fca5a5 !important; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.tag-ok { color: #6ee7b7; background: rgba(52,211,153,.12); border: 1px solid rgba(52,211,153,.35); }
+.tag-warn { color: #fde68a; background: rgba(251,191,36,.12); border: 1px solid rgba(251,191,36,.4); }
+
 /* RESPONSIVE */
 @media (max-width: 960px) {
   .hero-grid { grid-template-columns: 1fr; }
@@ -602,6 +830,8 @@ section, #probar, #metricas { scroll-margin-top: 80px; }
   .hero { padding: 56px 16px 64px; }
   .about { padding: 72px 16px; }
   #zona-probar, #zona-metricas { padding-top: 72px !important; padding-bottom: 72px !important; padding-left: 16px !important; padding-right: 16px !important; }
+  .lote-stats { grid-template-columns: 1fr 1fr; }
+  .res-main { flex-direction: column; align-items: flex-start; }
   .about-cards, .steps { grid-template-columns: 1fr; }
   .hero-stats { gap: 22px; }
   .nav { padding: 12px 16px; }
@@ -635,13 +865,17 @@ def construir_interfaz():
         with gr.Column(elem_id="zona-probar"):
             gr.HTML(PROBAR_HEAD)
             with gr.Row(elem_id="tool", equal_height=False):
-                with gr.Column(elem_id="panel-carga", scale=5):
-                    gr.HTML('<div class="tool-bar"><i></i><i></i><i></i><span>IMAGEN DE ENTRADA</span></div>')
-                    entrada = gr.Image(type="filepath", sources=["upload", "clipboard"], label="Arrastra una imagen o haz clic para seleccionarla",
-                                       elem_id="uploader", height=340)
-                    boton = gr.Button("Clasificar imagen", elem_id="btn-clasificar", variant="primary")
-                    gr.HTML('<div class="hint">Formatos: <b>JPG, PNG, WEBP</b> · Se redimensiona a 80 x 60 px automáticamente</div>')
-                with gr.Column(elem_id="panel-res", scale=6):
+                with gr.Column(elem_id="panel-carga", scale=4):
+                    gr.HTML(f'<div class="tool-bar"><i></i><i></i><i></i><span>IMÁGENES DE ENTRADA (1 A {MAX_LOTE})</span></div>')
+                    entrada = gr.File(file_count="multiple", file_types=["image"], type="filepath",
+                                      label=f"Arrastra una o varias imágenes (hasta {MAX_LOTE}) o haz clic para seleccionarlas",
+                                      elem_id="uploader")
+                    boton = gr.Button("Clasificar", elem_id="btn-clasificar", variant="primary")
+                    csv_salida = gr.File(label="CSV con la clasificación (nombre de la imagen y categoría)",
+                                         interactive=False, elem_id="csv-salida")
+                    gr.HTML(f'<div class="hint">Formatos: <b>JPG, PNG, WEBP</b> · Umbral de revisión manual: '
+                            f'<b>{_pct(UMBRAL_REVISION)}</b></div>')
+                with gr.Column(elem_id="panel-res", scale=8):
                     gr.HTML('<div class="panel-title">Resultado de la predicción <em>40 categorías</em></div>')
                     salida = gr.HTML(html_estado_vacio())
 
@@ -652,8 +886,8 @@ def construir_interfaz():
 
         gr.HTML(FOOTER)
 
-        entrada.change(al_cambiar_imagen, entrada, salida, queue=False)
-        boton.click(mostrar_cargando, entrada, salida, queue=False).then(clasificar, entrada, salida)
+        entrada.change(al_cambiar_archivos, entrada, [salida, csv_salida], queue=False)
+        boton.click(mostrar_cargando, entrada, salida, queue=False).then(clasificar, entrada, [salida, csv_salida])
 
     return demo, (tema if gradio_6 else None)
 
@@ -662,4 +896,5 @@ demo, tema_launch = construir_interfaz()
 
 if __name__ == "__main__":
     kwargs = {"css": CSS, "theme": tema_launch} if tema_launch is not None else {}
-    demo.queue().launch(**kwargs)
+    # allowed_paths: el CSV del lote se escribe en la carpeta temporal del sistema
+    demo.queue().launch(share="--share" in sys.argv, allowed_paths=[tempfile.gettempdir()], **kwargs)
